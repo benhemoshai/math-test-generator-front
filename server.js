@@ -33,16 +33,30 @@ const Question = mongoose.model('Question', questionSchema, 'questions');
 
 // PDF endpoint
 app.post('/generate-test', async (req, res) => {
+  const { topics, mixExams } = req.body;
+
+  if (!Array.isArray(topics) || topics.length === 0) {
+    return res.status(400).json({ error: 'Please select at least one topic.' });
+  }
+
   try {
+    // Build match criteria
+    const match = { topic: { $in: topics } };
+    if (!mixExams) {
+      match.exam = "2024 Summer A"; // default single exam
+    }
+
+    // Sample 8 random questions matching the criteria
     const questions = await Question.aggregate([
-      { $match: { exam: "2024 Summer A" } },
+      { $match: match },
       { $sample: { size: 8 } }
     ]);
 
     if (questions.length < 8) {
-      return res.status(400).json({ error: 'Not enough questions in the database.' });
+      return res.status(400).json({ error: 'Not enough questions available for selected topics.' });
     }
 
+    // Generate PDF
     const doc = new PDFDocument();
     const bufferStream = new stream.PassThrough();
 
@@ -53,30 +67,37 @@ app.post('/generate-test', async (req, res) => {
     bufferStream.pipe(res);
 
     for (let i = 0; i < questions.length; i++) {
+      const question = questions[i];
       if (i !== 0) doc.addPage();
 
-      doc.fontSize(14).text(`Question ${questions[i].number}:`, { align: 'left' });
-
-      const imageResponse = await axios.get(questions[i].image_url, { responseType: 'arraybuffer' });
-      const imgBuffer = Buffer.from(imageResponse.data, 'binary');
+      doc.fontSize(14).text(`Question ${question.number}:`, { align: 'left' });
+      doc.moveDown();
 
       try {
-        doc.image(imgBuffer, {
-          fit: [500, 700],
+        let url = question.image_url;
+        if (url.includes('github.com') && url.includes('/blob/')) {
+          url = url.replace('github.com', 'raw.githubusercontent.com').replace('/blob', '');
+        }
+
+        const imageResponse = await axios.get(url, { responseType: 'arraybuffer' });
+        const imgBuffer = Buffer.from(imageResponse.data, 'binary');
+
+        doc.image(imgBuffer, 50, doc.y, {
+          fit: [500, 500],
           align: 'center',
-          valign: 'center',
         });
-      } catch (imgErr) {
-        doc.text('⚠️ Failed to load image');
+      } catch (err) {
+        doc.text('⚠️ Failed to load image.');
       }
     }
 
     doc.end();
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to generate PDF' });
+    res.status(500).json({ error: 'Failed to generate PDF.' });
   }
 });
+
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
