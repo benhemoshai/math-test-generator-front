@@ -31,29 +31,72 @@ const questionSchema = new mongoose.Schema({
 
 const Question = mongoose.model('Question', questionSchema, 'questions');
 
-// PDF endpoint
+// 1️⃣ GET /topics - fetch all unique topics from DB
+app.get('/topics', async (req, res) => {
+  try {
+    const orderedTopics = await Question.aggregate([
+      {
+        $group: {
+          _id: '$number',
+          topic: { $first: '$topic' }
+        }
+      },
+      { $sort: { _id: 1 } }
+    ]);
+
+    const topics = orderedTopics.map(t => t.topic);
+    res.json(topics);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch topics' });
+  }
+});
+
+
+// 2️⃣ POST /generate-test - updated mixExams logic
 app.post('/generate-test', async (req, res) => {
   const { topics, mixExams } = req.body;
 
-  if (!Array.isArray(topics) || topics.length === 0) {
-    return res.status(400).json({ error: 'Please select at least one topic.' });
-  }
-
   try {
-    // Build match criteria
-    const match = { topic: { $in: topics } };
-    if (!mixExams) {
-      match.exam = "2024 Summer A"; // default single exam
-    }
+    let questions = [];
 
-    // Sample 8 random questions matching the criteria
-    const questions = await Question.aggregate([
-      { $match: match },
-      { $sample: { size: 8 } }
-    ]);
+    if (mixExams) {
+      // Get all topics from DB dynamically
+      const allTopics = await Question.distinct('topic');
 
-    if (questions.length < 8) {
-      return res.status(400).json({ error: 'Not enough questions available for selected topics.' });
+      for (const topic of allTopics) {
+        const sample = await Question.aggregate([
+          { $match: { topic } },
+          { $sample: { size: 1 } }
+        ]);
+
+        if (sample.length === 0) {
+          return res.status(400).json({ error: `No questions available for topic: ${topic}` });
+        }
+
+        questions.push(...sample);
+      }
+    } else {
+      if (!Array.isArray(topics) || topics.length === 0) {
+        return res.status(400).json({ error: 'Please select at least one topic.' });
+      }
+
+      const topicSamples = [];
+
+      for (const topic of topics) {
+        const sample = await Question.aggregate([
+          { $match: { topic } },
+          { $sample: { size: 2 } }
+        ]);
+
+        if (sample.length < 2) {
+          return res.status(400).json({ error: `Not enough questions for topic: ${topic}` });
+        }
+
+        topicSamples.push(...sample);
+      }
+
+      questions = topicSamples;
     }
 
     // Generate PDF
@@ -66,11 +109,15 @@ app.post('/generate-test', async (req, res) => {
     doc.pipe(bufferStream);
     bufferStream.pipe(res);
 
+    questions.sort((a, b) => a.number - b.number);
+
     for (let i = 0; i < questions.length; i++) {
       const question = questions[i];
       if (i !== 0) doc.addPage();
 
-      doc.fontSize(14).text(`Question ${question.number}:`, { align: 'left' });
+      doc.fontSize(14).text(`Question ${question.number} - ${question.topic}:`, { align: 'left' });
+      doc.moveDown();
+      doc.fontSize(12).text(`Exam: ${question.exam}`, { align: 'left' });
       doc.moveDown();
 
       try {
@@ -97,7 +144,6 @@ app.post('/generate-test', async (req, res) => {
     res.status(500).json({ error: 'Failed to generate PDF.' });
   }
 });
-
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
