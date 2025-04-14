@@ -4,32 +4,35 @@ import axios from 'axios';
 import PDFDocument from 'pdfkit';
 import stream from 'stream';
 import mongoose from 'mongoose';
+import { isAuthenticated } from '../middleware/auth.js';
 
 const router = express.Router();
 
+// ✅ Reuse existing model if already registered
 const questionSchema = new mongoose.Schema({
   question_id: String,
   number: Number,
   topic: String,
   exam: String,
-  image_url: String
+  image_url: String,
 });
+const Question = mongoose.models.Question || mongoose.model('Question', questionSchema, 'questions');
 
-const Question =  mongoose.models.Question || mongoose.model('Question', questionSchema, 'questions');
-
-router.post('/generate-test', async (req, res) => {
+// ✅ Generate test route (only for authenticated & approved users)
+router.post('/generate-test', isAuthenticated, async (req, res) => {
   const { topics, mixExams } = req.body;
 
   try {
     let questions = [];
 
     if (mixExams) {
+      // ✅ One random question per topic
       const allTopics = await Question.distinct('topic');
 
       for (const topic of allTopics) {
         const sample = await Question.aggregate([
           { $match: { topic } },
-          { $sample: { size: 1 } }
+          { $sample: { size: 1 } },
         ]);
 
         if (sample.length === 0) {
@@ -39,28 +42,26 @@ router.post('/generate-test', async (req, res) => {
         questions.push(...sample);
       }
     } else {
+      // ✅ Custom topics selection
       if (!Array.isArray(topics) || topics.length === 0) {
         return res.status(400).json({ error: 'Please select at least one topic.' });
       }
 
-      const topicSamples = [];
-
       for (const topic of topics) {
         const sample = await Question.aggregate([
           { $match: { topic } },
-          { $sample: { size: 2 } }
+          { $sample: { size: 2 } }, // 2 per topic (adjustable)
         ]);
 
         if (sample.length < 2) {
           return res.status(400).json({ error: `Not enough questions for topic: ${topic}` });
         }
 
-        topicSamples.push(...sample);
+        questions.push(...sample);
       }
-
-      questions = topicSamples;
     }
 
+    // ✅ Create PDF
     const doc = new PDFDocument();
     const bufferStream = new stream.PassThrough();
 
@@ -70,6 +71,7 @@ router.post('/generate-test', async (req, res) => {
     doc.pipe(bufferStream);
     bufferStream.pipe(res);
 
+    // ✅ Sort by question number
     questions.sort((a, b) => a.number - b.number);
 
     for (let i = 0; i < questions.length; i++) {
@@ -101,7 +103,7 @@ router.post('/generate-test', async (req, res) => {
 
     doc.end();
   } catch (err) {
-    console.error(err);
+    console.error('❌ PDF generation error:', err);
     res.status(500).json({ error: 'Failed to generate PDF.' });
   }
 });
