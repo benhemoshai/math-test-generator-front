@@ -37,7 +37,7 @@ export const sendApprovalEmail = (user) => {
       templateParams: {
         name: user.name,
         email: user.email,
-        approve_url: `http://localhost:5000/api/auth/approve/${user._id}`,
+        approve_url: `https://math-test-generator-back.onrender.com/api/auth/approve/${user._id}`,
       },
     });
   };
@@ -49,6 +49,7 @@ export const sendApprovalEmail = (user) => {
       templateParams: {
         name: user.name,
         email: user.email,
+        user_id: user._id
       },
     });
   };
