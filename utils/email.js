@@ -49,6 +49,7 @@ export const sendApprovalEmail = (user) => {
       templateParams: {
         name: user.name,
         email: user.email,
+        user_id: user._id
       },
     });
   };

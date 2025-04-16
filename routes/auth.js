@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import User from '../models/user.js';
 import { sendApprovalEmail, sendUserApprovedEmail } from '../utils/email.js'; // Import the sendApprovalEmail function
-
+import { isAuthenticated } from '../middleware/auth.js'; // Import the isAuthenticated middleware
 
 const router = express.Router();
 
@@ -81,6 +81,34 @@ router.get('/approve/:userId', async (req, res) => {
     await sendUserApprovedEmail(user); // Send email to user about approval
 
     res.status(200).json({ message: 'User approved successfully.' });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+router.get('/me',isAuthenticated , async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('-password');
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch user info' });
+  }
+});
+
+
+router.post('/activate/:userId', async (req, res) => {
+  try {
+    const user = await User.findById(req.params.userId);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    if (user.status !== 'approved') {
+      return res.status(400).json({ message: 'User is not yet approved' });
+    }
+
+    user.status = 'active';
+    await user.save();
+
+    res.status(200).json({ message: 'User activated' });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
