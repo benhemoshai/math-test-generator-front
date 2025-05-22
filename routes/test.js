@@ -1,4 +1,3 @@
-// routes/test.js
 import express from 'express';
 import axios from 'axios';
 import PDFDocument from 'pdfkit';
@@ -14,19 +13,23 @@ const questionSchema = new mongoose.Schema({
   number: Number,
   topic: String,
   exam: String,
+  examNumber: String, // ✅ NEW field
   image_url: String,
 });
-const Question = mongoose.models.Question || mongoose.model('Question', questionSchema, 'questions');
+
+const Question =
+  mongoose.models.Question ||
+  mongoose.model('Question', questionSchema, 'questions');
 
 // ✅ Generate test route (only for authenticated & approved users)
 router.post('/generate-test', isAuthenticated, async (req, res) => {
-  const { topics, mixExams } = req.body;
+  const { topics, mixExams, examNumber } = req.body;
 
   try {
     let questions = [];
 
     if (mixExams) {
-      // ✅ One random question per topic
+      // ✅ One random question per topic (across all exams)
       const allTopics = await Question.distinct('topic');
 
       for (const topic of allTopics) {
@@ -35,26 +38,30 @@ router.post('/generate-test', isAuthenticated, async (req, res) => {
           { $sample: { size: 1 } },
         ]);
 
-        if (sample.length === 0) {
-          return res.status(400).json({ error: `No questions available for topic: ${topic}` });
+        if (sample.length > 0) {
+          questions.push(...sample);
         }
-
-        questions.push(...sample);
       }
     } else {
-      // ✅ Custom topics selection
+      // ✅ Custom topics with specific exam number
       if (!Array.isArray(topics) || topics.length === 0) {
         return res.status(400).json({ error: 'Please select at least one topic.' });
       }
 
+      if (!examNumber) {
+        return res.status(400).json({ error: 'Missing exam number.' });
+      }
+
       for (const topic of topics) {
         const sample = await Question.aggregate([
-          { $match: { topic } },
-          { $sample: { size: 2 } }, // 2 per topic (adjustable)
+          { $match: { topic, examNumber } },
+          { $sample: { size: 1 } }, // Adjustable: 2 per topic
         ]);
 
-        if (sample.length < 2) {
-          return res.status(400).json({ error: `Not enough questions for topic: ${topic}` });
+        if (sample.length < 1) {
+          return res.status(400).json({
+            error: `Not enough questions for topic "${topic}" in exam ${examNumber}.`,
+          });
         }
 
         questions.push(...sample);
