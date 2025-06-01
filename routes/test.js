@@ -29,19 +29,24 @@ router.post('/generate-test', isAuthenticated, async (req, res) => {
     let questions = [];
 
     if (mixExams) {
-      const allTopics = await Question.distinct('topic');
+  if (!examNumber) {
+    return res.status(400).json({ error: 'Missing exam number for mix mode.' });
+  }
 
-      for (const topic of allTopics) {
-        const sample = await Question.aggregate([
-          { $match: { topic } },
-          { $sample: { size: 1 } },
-        ]);
+  const topicsInExam = await Question.distinct('topic', { examNumber });
 
-        if (sample.length > 0) {
-          questions.push(...sample);
-        }
-      }
-    } else {
+  for (const topic of topicsInExam) {
+    const sample = await Question.aggregate([
+      { $match: { topic, examNumber } },
+      { $sample: { size: 1 } },
+    ]);
+
+    if (sample.length > 0) {
+      questions.push(...sample);
+    }
+  }
+}
+ else {
       if (!Array.isArray(topics) || topics.length === 0) {
         return res.status(400).json({ error: 'Please select at least one topic.' });
       }
