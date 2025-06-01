@@ -1,4 +1,3 @@
-// routes/test.js
 import express from 'express';
 import axios from 'axios';
 import PDFDocument from 'pdfkit';
@@ -8,53 +7,64 @@ import { isAuthenticated } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// ✅ Reuse existing model if already registered
+// ✅ Schema supports string or array for image_url
 const questionSchema = new mongoose.Schema({
   question_id: String,
   number: Number,
   topic: String,
   exam: String,
-  image_url: String,
+  examNumber: String,
+  image_url: mongoose.Schema.Types.Mixed,
 });
-const Question = mongoose.models.Question || mongoose.model('Question', questionSchema, 'questions');
+
+const Question =
+  mongoose.models.Question ||
+  mongoose.model('Question', questionSchema, 'questions');
 
 // ✅ Generate test route (only for authenticated & approved users)
 router.post('/generate-test', isAuthenticated, async (req, res) => {
-  const { topics, mixExams } = req.body;
+  const { topics, mixExams, examNumber } = req.body;
 
   try {
     let questions = [];
 
     if (mixExams) {
-      // ✅ One random question per topic
-      const allTopics = await Question.distinct('topic');
+  if (!examNumber) {
+    return res.status(400).json({ error: 'Missing exam number for mix mode.' });
+  }
 
-      for (const topic of allTopics) {
-        const sample = await Question.aggregate([
-          { $match: { topic } },
-          { $sample: { size: 1 } },
-        ]);
+  const topicsInExam = await Question.distinct('topic', { examNumber });
 
-        if (sample.length === 0) {
-          return res.status(400).json({ error: `No questions available for topic: ${topic}` });
-        }
+  for (const topic of topicsInExam) {
+    const sample = await Question.aggregate([
+      { $match: { topic, examNumber } },
+      { $sample: { size: 1 } },
+    ]);
 
-        questions.push(...sample);
-      }
-    } else {
-      // ✅ Custom topics selection
+    if (sample.length > 0) {
+      questions.push(...sample);
+    }
+  }
+}
+ else {
       if (!Array.isArray(topics) || topics.length === 0) {
         return res.status(400).json({ error: 'Please select at least one topic.' });
       }
 
+      if (!examNumber) {
+        return res.status(400).json({ error: 'Missing exam number.' });
+      }
+
       for (const topic of topics) {
         const sample = await Question.aggregate([
-          { $match: { topic } },
-          { $sample: { size: 2 } }, // 2 per topic (adjustable)
+          { $match: { topic, examNumber } },
+          { $sample: { size: 1 } },
         ]);
 
-        if (sample.length < 2) {
-          return res.status(400).json({ error: `Not enough questions for topic: ${topic}` });
+        if (sample.length < 1) {
+          return res.status(400).json({
+            error: `Not enough questions for topic "${topic}" in exam ${examNumber}.`,
+          });
         }
 
         questions.push(...sample);
@@ -71,33 +81,49 @@ router.post('/generate-test', isAuthenticated, async (req, res) => {
     doc.pipe(bufferStream);
     bufferStream.pipe(res);
 
-    // ✅ Sort by question number
+    // ✅ Sort questions by number
     questions.sort((a, b) => a.number - b.number);
 
     for (let i = 0; i < questions.length; i++) {
       const question = questions[i];
       if (i !== 0) doc.addPage();
 
-      doc.fontSize(14).text(`Question ${question.number} - ${question.topic}:`, { align: 'left' });
-      doc.moveDown();
-      doc.fontSize(12).text(`Exam: ${question.exam}`, { align: 'left' });
-      doc.moveDown();
+      const urls = Array.isArray(question.image_url)
+        ? question.image_url
+        : [question.image_url];
 
-      try {
-        let url = question.image_url;
-        if (url.includes('github.com') && url.includes('/blob/')) {
-          url = url.replace('github.com', 'raw.githubusercontent.com').replace('/blob', '');
+      for (let j = 0; j < urls.length; j++) {
+        const urlRaw = urls[j];
+
+        if (j > 0) doc.addPage();
+
+        if (j === 0) {
+          doc.fontSize(14).text(`Question ${question.number} - ${question.topic}:`, { align: 'left' });
+          doc.moveDown();
+          doc.fontSize(12).text(`Exam: ${question.exam}`, { align: 'left' });
+          doc.moveDown();
         }
 
-        const imageResponse = await axios.get(url, { responseType: 'arraybuffer' });
-        const imgBuffer = Buffer.from(imageResponse.data, 'binary');
+        try {
+          let url = urlRaw;
+          if (url.includes('github.com') && url.includes('/blob/')) {
+            url = url.replace('github.com', 'raw.githubusercontent.com').replace('/blob', '');
+          }
 
-        doc.image(imgBuffer, 50, doc.y, {
-          fit: [500, 500],
-          align: 'center',
-        });
-      } catch (err) {
-        doc.text('⚠️ Failed to load image.');
+          const imageResponse = await axios.get(url, { responseType: 'arraybuffer' });
+          const imgBuffer = Buffer.from(imageResponse.data, 'binary');
+
+          doc.image(imgBuffer, {
+            fit: [500, 500],
+            align: 'center',
+            valign: 'top',
+          });
+
+          doc.moveDown(1);
+        } catch (err) {
+          doc.text(`⚠️ Failed to load image: ${urlRaw}`);
+          doc.moveDown();
+        }
       }
     }
 
